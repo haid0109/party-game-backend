@@ -1,0 +1,44 @@
+{
+  "name": "party-game",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "dependencies": {
+    "audio-decode": "^1.4.0",
+    "audiobuffer-to-wav": "^1.0.0",
+    "av": "^0.4.9",
+    "busboy-express": "^1.0.6",
+    "express": "^4.17.1",
+    "express-busboy": "^7.0.1",
+    "flac.js": "^0.2.1",
+    "mp3": "^0.1.0",
+    "mp3.js": "^0.2.0",
+    "node-fetch": "^2.6.0",
+    "ogg.js": "^0.1.0",
+    "opus.js": "^0.1.1",
+    "request": "^2.88.2",
+    "uniqid": "^5.2.0",
+    "vmsg": "^0.3.6",
+    "vorbis.js": "^0.1.1",
+    "waveform-data": "^3.3.1",
+    "web-audio-api": "^0.2.2",
+    "webm": "^1.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.2"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "nodemon assets/js/start.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/haid0109/party-game.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/haid0109/party-game/issues"
+  },
+  "homepage": "https://github.com/haid0109/party-game#readme"
+}
