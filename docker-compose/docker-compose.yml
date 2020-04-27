@@ -1,0 +1,26 @@
+version: '3.5'
+
+services:
+  mongodb:
+    image: 'bitnami/mongodb:4.0.3'
+    environment:
+      - MONGODB_USERNAME=partygame
+      - MONGODB_PASSWORD=partygame
+      - MONGODB_DATABASE=partygame
+      - MONGODB_ADVERTISED_HOSTNAME=mongodb
+      - MONGODB_REPLICA_SET_MODE=primary
+      - MONGODB_ROOT_PASSWORD=partygame
+      - MONGODB_REPLICA_SET_KEY=replicasetkey
+    ports:
+      - 27017:27017
+
+  minio:
+    image: minio/minio
+    ports:
+      - "9000:9000"
+    volumes:
+      - ./test/.minio/data:/export
+    environment:
+      - "MINIO_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE"
+      - "MINIO_SECRET_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    command: server /export
