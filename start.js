@@ -356,8 +356,11 @@ app.post("/game/player/audio/:gameCode/:secretKey", async (req, res) => {//patch
     //assigns audio meta data in db
     await GameModel.updateOne(
         {"gameCode": gameCode}, 
-        {"$set": {"game.players.$[elem].audioMetaData": "succes"} },
-        {multi: true, arrayFilters: [{"elem.secretKey": {$eq: secretKey }}]}
+        // {"$set": {"game.players.$[elem].audioMetaData": "succes"} },
+        // {multi: true, arrayFilters: [{"elem.secretKey": {$eq: secretKey }}]}
+        {
+            players
+        }
     )
     .then((result) => {
         console.log("succes:", result);
