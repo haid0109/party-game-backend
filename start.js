@@ -5,12 +5,100 @@ const busboy = require("express-busboy");
 const fs = require("fs");
 const WAA = require("web-audio-api");
 const audioBufferToWav = require("audiobuffer-to-wav");
+const mongoose = require('mongoose');
+const minio = require('minio');
+const customId = require("custom-id");
 
-let game = null;
+let GameModel = null;
+let minioClient = null;
 
-function checkIfPlayerExist(name){
-    let player = game.players.find(player => player.name == name);
-    return player;
+async function settingUpMongoDBAndMinio(){
+    //connect to MongoDB
+    await mongoose.connect("mongodb://partygame:partygame@localhost:27017/partygame", { 
+        useNewUrlParser: true, 
+        useCreateIndex: true, 
+        useFindAndModify: false, 
+        useUnifiedTopology: true 
+    });
+
+    //create model
+    GameModel = mongoose.model("Game", {
+        gameCode: String,
+        game: Object
+    });
+
+    //connect to Minio
+    minioClient = new minio.Client({
+        endPoint: '127.0.0.1',
+        port: 9000,
+        useSSL: false,
+        accessKey: 'AKIAIOSFODNN7EXAMPLE',
+        secretKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
+    });
+
+    //check if bucket exists
+    let gamebucketExists = null;
+    await minioClient.bucketExists("gamebucket")
+    .then(exists => gamebucketExists = exists)
+    .catch(err => console.log(err));
+
+    //create bucket if it does not exist
+    if(!gamebucketExists){
+        await minioClient.makeBucket("gamebucket")
+        .catch(err => console.log(err));
+    }
+
+    //creates game
+    await GameModel.create({
+        gameCode: "22222",
+        game: {
+            state: "initialized",
+            players: [
+                {
+                    secretKey: new mongoose.Types.ObjectId(),
+                    name: "haidar"
+                }
+            ],
+            numberOfRounds: 0,
+        }
+    })
+    // .then(() => res.send())
+    .catch((err) => {
+        console.log(err);
+        // res.status(500).send();
+    });
+
+    // //gets game
+    // await GameModel.findOne({gameCode: "22222"})
+    // .then(game => console.log(game))
+    // // .then(() => res.send())
+    // .catch((err) => {
+    //     console.log(err);
+    //     // res.status(500).send();
+    // });
+
+    //updates game
+    await GameModel.updateMany({gameCode: "22222"}, {
+        $set: {game: {
+            state: "initialized",
+            players: [],
+            numberOfRounds: 0,
+        }}
+    })
+    // .then(() => res.send())
+    .catch((err) => {
+        console.log(err);
+        // res.status(500).send();
+    });
+
+    //deletes game
+    await GameModel.deleteMany({gameCode: "22222"})
+    // .then(() => res.send())
+    .catch((err) => {
+        console.log(err);
+        // res.status(500).send();
+    });
+
 }
 
 function shuffleArray(array) {
@@ -20,147 +108,299 @@ function shuffleArray(array) {
     }
 }
 
-function countNumOfRounds() {
-    let numOfPlayersReady = 0;
-    game.players.forEach(player => {
-        if(player.playerReady){
-            numOfPlayersReady++;
-        }
-    });
-    game.numberOfRounds = numOfPlayersReady;
-}
-
-app.use(express.json());
+settingUpMongoDBAndMinio();
 
 app.use(function (req, res, next) {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Methods', '*');
+    res.setHeader('Access-Control-Allow-Headers', '*');
     next();
 });
+app.use(express.json());
 
-app.post("/game/current", (req, res) => {
-    game = {
-        state: "initialized",
-        players: [],
-        numberOfRounds: 0,
+app.get("/game/:gameCode", (req, res) => {
+    let gameCode = req.params.gameCode.toUpperCase();
+
+    GameModel.findOne({"gameCode": gameCode})
+    .then((gameDocument) => {
+        if(!gameDocument){return res.status(404).send();}
+        res.send(gameDocument.game);
+    })
+    .catch(err => console.log(err));
+});
+
+app.post("/game/new", async (req, res) => {
+    let gameCode = customId({});
+    let playerObj = {
+        secretKey: new mongoose.Types.ObjectId(),
+        name: req.body.name,
+        audioMetaData: "test"
     };
-    game.players.push(req.body);
-    game.state = "preround";
-    res.send();
-});
+    
+    await GameModel.findOne({"gameCode": gameCode})
+    .then((gameDocument) => {
+        if(!!gameDocument){return gameCode = null;}
+    })
+    .catch((err) => {
+        console.log(err);
+        res.status(500).send();
+    });
+    if(!gameCode){return res.status(503).send();}
 
-app.get("/game/current", (req, res) => {
-    if(!!game){
-        if((game.players.length < 6) && (game.state == "preround")){
-            res.send(game);
+    GameModel.create({
+        "gameCode": gameCode,
+        "game": {
+            "state": "preround",
+            "players": [playerObj],
+            "numberOfRounds": "0",
+            "currentRound": "0",
         }
-        else{ res.status(403).send(game); }
-    }
-    else{ res.status(404).send("there is no game"); }
+    })
+    .then(() => {
+        res.send({
+            secretKey: playerObj.secretKey,
+            code: gameCode
+        })
+    })
+    .catch((err) => {
+        console.log(err);
+        res.status(500).send();
+    });
 });
+ 
+app.patch("/game/join/:gameCode", async (req, res) => {// is it a patch or post request?
+    let gameCode = req.params.gameCode.toUpperCase();
+    let game = null;
+    let player = null;
+    let playerObj = {
+        secretKey: new mongoose.Types.ObjectId(),
+        name: req.body.name,
+        audioMetaData: "test"
+    };
 
-app.get("/game/current/state", (req, res) => {
-    if(!!game){
-        res.send({state: game.state});
-    }
-    else{ res.status(404).send("there is no game"); }
-});
+    await GameModel.findOne({"gameCode": gameCode})
+    .then((gameDocument) => {
+        if(!gameDocument){return;}
+        game = gameDocument.game;
+        player = game.players.find(player => player.name == playerObj.name);
+    })
+    .catch(err => console.log(err));
+        
+    if(!game){return res.status(404).send();}
+    if(!!player){return res.status(403).send();}
+    if(game.state != "preround"){return res.status(400).send();}
 
-app.post("/game/current/player", (req, res) => {
-    if(!!game){
-        if(game.players.length < 6){
-                game.players.push(req.body);
-                res.send();
+    GameModel.updateOne(
+        {"gameCode": gameCode},
+        {"$push": 
+            {"game.players": playerObj}
         }
-        else{res.status(403).send("too many players");}
-    }
-    else{res.status(404).send("there is no game");}
+    )
+    .then(() => res.send({secretKey: playerObj.secretKey}))
+    .catch((err) => {
+        console.log(err);
+        res.status(500).send();
+    });
 });
 
-app.get("/game/current/playerExist/:playerName", (req, res) => {
-    let playerName = req.params.playerName;
-    if(!checkIfPlayerExist(playerName)){
-        return res.status(404).send();
-    }
-    res.send();
+app.get("/game/player/exist/:gameCode/:secretKey", (req, res) => {
+    let gameCode = req.params.gameCode.toUpperCase();
+    let secretKey = req.params.secretKey;
+
+    GameModel.findOne({"gameCode": gameCode})
+    .then((gameDocument) => {
+        if(!gameDocument){return res.status(404).send();}
+        let player = gameDocument.game.players.find(player => player.secretKey == secretKey);
+        if(!player){return res.status(403).send()}
+        res.send();
+    })
+    .catch(err => console.log(err));
+});
+
+app.get("/game/players/:gameCode", (req, res) => {
+    let gameCode = req.params.gameCode.toUpperCase();
+
+    GameModel.findOne({"gameCode": gameCode})
+    .then((gameDocument) => {
+        if(!gameDocument){return res.status(404).send();}
+        let playerNamesAndStatus = [];
+        gameDocument.game.players.forEach(player => {
+            playerNamesAndStatus.push({
+                name: player.name,
+                playerReady: player.playerReady,
+            });
+        });
+        res.send({playersArray: playerNamesAndStatus});
+    })
+    .catch(err => console.log(err));
+});
+
+app.get("/game/state/:gameCode", (req, res) => {
+    let gameCode = req.params.gameCode.toUpperCase();
+
+    GameModel.findOne({"gameCode": gameCode})
+    .then((gameDocument) => {
+        if(!gameDocument){return res.status(404).send();}
+        res.send({state: gameDocument.game.state});
+    })
+    .catch((err) => {
+        console.log(err);
+        res.status(500).send();
+    });
+});
+
+app.patch("/game/start/:gameCode", async (req, res) => {// is it a patch or post request?
+    let gameCode = req.params.gameCode.toUpperCase();
+    let numOfPlayersReady = 0;
+    let gameAlreadyStarted = true;
+    let allPlayersAreReady = null;
+    let players = null;
+
+    //checks if all players are ready, and gets the players array for later use
+    await GameModel.findOne({"gameCode": gameCode})
+    .then((gameDocument) => {
+        if(!gameDocument){return}
+        if(gameDocument.game.currentRound == 0){return gameAlreadyStarted = false;}
+
+        gameDocument.game.players.forEach(player => {
+            if(player.playerReady){numOfPlayersReady++;}
+        });
+
+        if(gameDocument.game.players.length != numOfPlayersReady){return;}
+        allPlayersAreReady = true;
+        players = gameDocument.game.players;
+    })
+    .catch((err) => {
+        console.log(err);
+        res.status(500).send();
+    });
+
+    if(gameAlreadyStarted){return res.status(403).send();}
+    if(!allPlayersAreReady){return res.status(404).send();}
+    shuffleArray(players);
+
+    //sets the game state, new shuffled players array, and round count
+    GameModel.updateOne(
+        {"gameCode": gameCode},
+        {"$set": 
+            {
+                "game.state": "in progress",
+                "game.players": players,
+                "game.numberOfRounds": numOfPlayersReady,
+                "game.currentRound": "1"
+            }
+        }
+    )
+    .then(() => {res.send();})
+    .catch((err) => {
+        console.log(err);
+        res.status(500).send();
+    });
 });
 
 busboy.extend(app, {
-    upload: true,
-    allowedPath: "/game/current/postAudio",
+    upload: true
 });
 
-app.post("/game/current/postAudio", (req, res) => {
-    let parsedPlayerData = JSON.parse(req.body.playerData);
-    let playerName = parsedPlayerData.name;
-    let correctAnswer = parsedPlayerData.answer;
-    let audioSpeed = parsedPlayerData.speed;
-    let audioReverse = parsedPlayerData.reverse;
-    let audioDataPath = req.files.audio.file;
+app.post("/game/player/audio/:gameCode/:secretKey", async (req, res) => {//patch or post request?
+    let gameCode = req.params.gameCode.toUpperCase();
+    let secretKey = req.params.secretKey;
+    // let audioDataPath = req.files.audio.file;
 
-    //checks if player exists
-    let player = checkIfPlayerExist(playerName);
-    if(!player) {
-        return res.status(404).send();
-    }
+    // let parsedAudioMetaData = JSON.parse(req.body.audioMetaData);
+    // let correctAnswer = parsedAudioMetaData.answer;
+    // let audioSpeed = parsedAudioMetaData.speed;
+    // let audioReverse = parsedAudioMetaData.reverse;
 
-    //assigns data
-    player.audioPath = audioDataPath;
-    player.answer = correctAnswer;
-    player.speed = audioSpeed;
-    player.reverse = audioReverse;
-    player.playerReady = true;
+    // let audioId = new mongoose.Types.ObjectId();
+    // let arrayBufferWav = null;
+
+    // let audioObj = {
+    //     audioId: audioId,
+    //     answer: correctAnswer,
+    //     speed: audioSpeed,
+    //     reverse: audioReverse
+    // }
     
-    //reverses audio data
-    if(audioReverse){
-        let buffer = fs.readFileSync(audioDataPath);
-        let audioCtx = new WAA.AudioContext();
-        audioCtx.decodeAudioData(buffer, 
-            function(audioBuffer) {
-                Array.prototype.reverse.call( audioBuffer.getChannelData(0) );
-                Array.prototype.reverse.call( audioBuffer.getChannelData(1) );
-                let arrayBufferWav = audioBufferToWav(audioBuffer);
-                fs.writeFileSync(audioDataPath, Buffer.from(arrayBufferWav));
-            },
-            function(err){
-                console.log("Error with decoding audio data: ", err);
-                res.status(500); //does not work
-            }
-        );
-    }
-    res.send(); //only sends status 200, even if status is set to 500
+    //reverses audio data and saves it in minio
+    // if(audioReverse){
+    //     let buffer = fs.readFileSync(audioDataPath);
+    //     let audioCtx = new WAA.AudioContext();
+    //     audioCtx.decodeAudioData(buffer, 
+    //         function(audioBuffer) {
+    //             Array.prototype.reverse.call( audioBuffer.getChannelData(0) );
+    //             Array.prototype.reverse.call( audioBuffer.getChannelData(1) );
+    //             arrayBufferWav = audioBufferToWav(audioBuffer);
+    //             minioClient.putObject("gamebucket", `${audioId}.wav`, Buffer.from(arrayBufferWav))
+    //             .then(() => res.send())
+    //             .catch((err) => {
+    //                 console.log(err);
+    //                 res.status(500).send();
+    //             });
+    //         },
+    //         function(err){
+    //             console.log("Error with decoding audio data: ", err);
+    //             res.status(500); //does not work
+    //         }
+    //     );
+    // }
+    // else{
+    //     minioClient.putObject("gamebucket", `${audioId}.wav`, Buffer.from(arrayBufferWav))
+    //     .then(() => res.send())
+    //     .catch((err) => {
+    //         console.log(err);
+    //         res.status(500).send();
+    //     });
+    // }
+
+    //assigns audio meta data in db
+    await GameModel.updateOne(
+        {"gameCode": gameCode}, 
+        // {"$set": {"game.players.$[elem].audioMetaData": "succes"} },
+        // {multi: true, arrayFilters: [{"elem.secretKey": {$eq: secretKey }}]}
+        {
+            players
+        }
+    )
+    .then((result) => {
+        console.log("succes:", result);
+        res.send();
+    })
+    .catch((err) => {
+        console.log("adding audio meta data", err);
+        res.status(500).send();
+    });
 });
 
-app.get("/game/current/getAudio/:playerName", (req, res) => {
-    let playerName = req.params.playerName;
-    let player = checkIfPlayerExist(playerName);
-    if(!player) {
-        return res.status(404).send();
-    }
+app.get("/game/player/audio/data/:gameCode/:secretKey", (req, res) => {//how?
+    let gameCode = req.params.gameCode.toUpperCase();
+    let secretKey = req.params.secretKey;
+
+    GameModel.findOne({
+        "gameCode": gameCode,
+        "game.players.secretKey": secretKey
+    })
+    .then((gameDocument) => {
+        console.log(gameDocument);
+    })
+    .catch((err) => {
+        console.log(err);
+        res.status(500).send();
+    });
+
     let buffer = fs.readFileSync(player.audioPath);
     res.send(buffer);
 });
 
-app.get("/game/current/getAudioSpeed/:playerName", (req, res) => {
-    let playerName = req.params.playerName;
-    let player = checkIfPlayerExist(playerName);
-    if(!player) {
-        return res.status(404).send();
-    }
+app.get("/game/player/audio/speed/:gameCode/:secretKey", (req, res) => {
+    let gameCode = req.params.gameCode.toUpperCase();
+    let secretKey = req.params.secretKey;
+
     res.send({speed: player.speed});
 });
 
-app.post("/game/current/start", (req, res) => {
-    countNumOfRounds();
-    if(game.numberOfRounds != game.players.length) {
-        return res.status(404).send("all players must be ready to start the game");
-    }
-    game.state = "in progress";
-    shuffleArray(game.players);
-    res.status(204).send("game in progress");
-});
-
-app.get("/game/current/roundAudio/:roundNum", (req, res) => {
+app.get("/game/round/audio/:gameCode/:roundNum", (req, res) => {
+    let gameCode = req.params.gameCode.toUpperCase();
     let roundIndex = req.params.roundNum - 1;
     if(!game.players[roundIndex]) {
         return res.status(404).send();
@@ -169,7 +409,8 @@ app.get("/game/current/roundAudio/:roundNum", (req, res) => {
     res.send(buffer);
 });
 
-app.get("/game/current/roundAudioSpeed/:roundNum", (req, res) => {
+app.get("/game/round/audio/speed/:gameCode/:roundNum", (req, res) => {
+    let gameCode = req.params.gameCode.toUpperCase();
     let roundIndex = req.params.roundNum - 1;
     if(!game.players[roundIndex]) {
         return res.status(404).send();
@@ -177,7 +418,8 @@ app.get("/game/current/roundAudioSpeed/:roundNum", (req, res) => {
     res.send({speed: game.players[roundIndex].speed});
 });
 
-app.post("/game/current/saveTheGuess", (req, res) => {
+app.post("/game/saveGuess/:gameCode", (req, res) => {
+    let gameCode = req.params.gameCode.toUpperCase();
     let playerName = req.body.playerName;
     let playerGuess = req.body.guess;
     let player = checkIfPlayerExist(playerName);
@@ -187,7 +429,56 @@ app.post("/game/current/saveTheGuess", (req, res) => {
     res.send();
 });
 
-app.get("/game/current/checkIfAllPlayersAnswered/:roundNum", (req, res) => {
+app.get("/game/round/last/:gameCode", (req, res) => {
+    let gameCode = req.params.gameCode.toUpperCase();
+
+    GameModel.findOne({"gameCode": gameCode})
+    .then((gameDocument) => {
+        if(!gameDocument){return}
+        if(gameDocument.game.currentRound != gameDocument.game.numberOfRounds){return res.send(404);}
+        res.send();
+    })
+    .catch((err) => {
+        console.log(err);
+        res.status(500).send();
+    });
+});
+
+app.patch("/game/round/next/:gameCode/:roundNum", async (req, res) => {// new http request
+    let gameCode = req.params.gameCode.toUpperCase();
+    let roundNum = req.params.roundNum;
+    let roundAlreadyChanged = true;
+    let gameNotStarted = true;
+
+    await GameModel.findOne({"gameCode": gameCode})
+    .then((gameDocument) => {
+        if(!gameDocument){return}
+        if(gameDocument.game.currentRound == roundNum){return roundAlreadyChanged = false;}
+        if(gameDocument.game.state == "in progress"){return gameNotStarted = false;}
+    })
+    .catch((err) => {
+        console.log(err);
+        res.status(500).send();
+    });
+
+    if(roundAlreadyChanged){return res.status(403).send();}
+    if(gameNotStarted){return res.status(404).send();}
+
+    GameModel.updateOne(
+        {"gameCode": gameCode},
+        {"$set": 
+            {"game.currentRound": ++roundNum}
+        }
+    )
+    .then(() => {res.send();})
+    .catch((err) => {
+        console.log(err);
+        res.status(500).send();
+    });
+});
+
+app.get("/game/players/answered/:gameCode/:roundNum", (req, res) => {
+    let gameCode = req.params.gameCode.toUpperCase();
     let roundIndex = req.params.roundNum - 1;
     let numberOfPlayersAnswered = 0;
 
@@ -199,9 +490,10 @@ app.get("/game/current/checkIfAllPlayersAnswered/:roundNum", (req, res) => {
     else{res.status(404).send();}
 });
 
-app.get("/game/current/getRoundResults/:roundNumAndPlayerName", (req, res) => {
-    let roundIndex = req.params.roundNumAndPlayerName.substring(0, 1) - 1;
-    let playerName = req.params.roundNumAndPlayerName.substring(1);
+app.get("/game/round/results/:gameCode/:playerName", (req, res) => {
+    let gameCode = req.params.gameCode.toUpperCase();
+    let roundIndex = req.params.roundNum - 1;
+    let playerName = req.params.playerName;
     let player = checkIfPlayerExist(playerName);
     let playerGuess = player.guess[roundIndex];
     let correctAnswer = game.players[roundIndex].answer;
@@ -214,14 +506,8 @@ app.get("/game/current/getRoundResults/:roundNumAndPlayerName", (req, res) => {
     else{res.status(404).send(correctAnswer);}
 });
 
-app.get("/game/current/checkIfLastRound/:roundNum", (req, res) => {
-    let roundNum = req.params.roundNum;
-    if(roundNum == game.numberOfRounds){res.send();}
-    else if(roundNum < game.numberOfRounds && roundNum > 0){res.status(404).send();}
-    else{res.status(403);}
-});
-
-app.get("/game/current/showPlayerScores", (req, res) => {
+app.get("/game/players/scores/:gameCode", (req, res) => {
+    let gameCode = req.params.gameCode.toUpperCase();
     if(!!game.players){
         res.send({players: game.players});
     }
