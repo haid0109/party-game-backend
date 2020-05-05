@@ -2,15 +2,23 @@ const express = require("express");
 const app = express();
 const path = require("path");
 const busboy = require("express-busboy");
+const mongoose = require('mongoose');
+const {v4: uuidv4} = require('uuid');
+const minio = require('minio');
+const customId = require("custom-id");
 const fs = require("fs");
 const WAA = require("web-audio-api");
 const audioBufferToWav = require("audiobuffer-to-wav");
-const mongoose = require('mongoose');
-const minio = require('minio');
-const customId = require("custom-id");
 
 let GameModel = null;
 let minioClient = null;
+
+function shuffleArray(array) {
+    for (let arrayIndex = 0; arrayIndex < array.length; arrayIndex++) {
+        const randomNum = Math.floor(Math.random() * (arrayIndex + 1));
+        [array[arrayIndex], array[randomNum]] = [array[randomNum], array[arrayIndex]];
+    }
+}
 
 async function settingUpMongoDBAndMinio(){
     //connect to MongoDB
@@ -40,12 +48,12 @@ async function settingUpMongoDBAndMinio(){
     let gamebucketExists = null;
     await minioClient.bucketExists("gamebucket")
     .then(exists => gamebucketExists = exists)
-    .catch(err => console.log(err));
+    .catch(err => console.log("checking if bucket exists failed: ", err));
 
     //create bucket if it does not exist
     if(!gamebucketExists){
         await minioClient.makeBucket("gamebucket")
-        .catch(err => console.log(err));
+        .catch(err => console.log("creating a bucket failed: ", err));
     }
 
     //creates game
@@ -55,7 +63,7 @@ async function settingUpMongoDBAndMinio(){
             state: "initialized",
             players: [
                 {
-                    secretKey: new mongoose.Types.ObjectId(),
+                    secretKey: uuidv4(),
                     name: "haidar"
                 }
             ],
@@ -101,13 +109,6 @@ async function settingUpMongoDBAndMinio(){
 
 }
 
-function shuffleArray(array) {
-    for (let arrayIndex = 0; arrayIndex < array.length; arrayIndex++) {
-        const randomNum = Math.floor(Math.random() * (arrayIndex + 1));
-        [array[arrayIndex], array[randomNum]] = [array[randomNum], array[arrayIndex]];
-    }
-}
-
 settingUpMongoDBAndMinio();
 
 app.use(function (req, res, next) {
@@ -126,13 +127,13 @@ app.get("/game/:gameCode", (req, res) => {
         if(!gameDocument){return res.status(404).send();}
         res.send(gameDocument.game);
     })
-    .catch(err => console.log(err));
+    .catch(err => console.log("getting gameDocument object failed: ", err));
 });
 
 app.post("/game/new", async (req, res) => {
     let gameCode = customId({});
     let playerObj = {
-        secretKey: new mongoose.Types.ObjectId(),
+        secretKey: uuidv4(),
         name: req.body.name,
         audioMetaData: "test"
     };
@@ -142,7 +143,7 @@ app.post("/game/new", async (req, res) => {
         if(!!gameDocument){return gameCode = null;}
     })
     .catch((err) => {
-        console.log(err);
+        console.log("getting gameDocument object failed: ", err);
         res.status(500).send();
     });
     if(!gameCode){return res.status(503).send();}
@@ -163,7 +164,7 @@ app.post("/game/new", async (req, res) => {
         })
     })
     .catch((err) => {
-        console.log(err);
+        console.log("creating new game failed", err);
         res.status(500).send();
     });
 });
@@ -173,7 +174,7 @@ app.patch("/game/join/:gameCode", async (req, res) => {// is it a patch or post 
     let game = null;
     let player = null;
     let playerObj = {
-        secretKey: new mongoose.Types.ObjectId(),
+        secretKey: uuidv4(),
         name: req.body.name,
         audioMetaData: "test"
     };
@@ -184,7 +185,7 @@ app.patch("/game/join/:gameCode", async (req, res) => {// is it a patch or post 
         game = gameDocument.game;
         player = game.players.find(player => player.name == playerObj.name);
     })
-    .catch(err => console.log(err));
+    .catch(err => console.log("getting gameDocument object failed: ", err));
         
     if(!game){return res.status(404).send();}
     if(!!player){return res.status(403).send();}
@@ -198,7 +199,7 @@ app.patch("/game/join/:gameCode", async (req, res) => {// is it a patch or post 
     )
     .then(() => res.send({secretKey: playerObj.secretKey}))
     .catch((err) => {
-        console.log(err);
+        console.log("adding player to game failed: ", err);
         res.status(500).send();
     });
 });
@@ -214,7 +215,7 @@ app.get("/game/player/exist/:gameCode/:secretKey", (req, res) => {
         if(!player){return res.status(403).send()}
         res.send();
     })
-    .catch(err => console.log(err));
+    .catch(err => console.log("getting gameDocument object failed: ", err));
 });
 
 app.get("/game/players/:gameCode", (req, res) => {
@@ -232,7 +233,7 @@ app.get("/game/players/:gameCode", (req, res) => {
         });
         res.send({playersArray: playerNamesAndStatus});
     })
-    .catch(err => console.log(err));
+    .catch(err => console.log("getting gameDocument object failed: ", err));
 });
 
 app.get("/game/state/:gameCode", (req, res) => {
@@ -244,7 +245,7 @@ app.get("/game/state/:gameCode", (req, res) => {
         res.send({state: gameDocument.game.state});
     })
     .catch((err) => {
-        console.log(err);
+        console.log("getting gameDocument object failed: ", err);
         res.status(500).send();
     });
 });
@@ -271,7 +272,7 @@ app.patch("/game/start/:gameCode", async (req, res) => {// is it a patch or post
         players = gameDocument.game.players;
     })
     .catch((err) => {
-        console.log(err);
+        console.log("getting gameDocument object failed: ",err);
         res.status(500).send();
     });
 
@@ -293,7 +294,7 @@ app.patch("/game/start/:gameCode", async (req, res) => {// is it a patch or post
     )
     .then(() => {res.send();})
     .catch((err) => {
-        console.log(err);
+        console.log("starting game failed: ", err);
         res.status(500).send();
     });
 });
@@ -305,69 +306,67 @@ busboy.extend(app, {
 app.post("/game/player/audio/:gameCode/:secretKey", async (req, res) => {//patch or post request?
     let gameCode = req.params.gameCode.toUpperCase();
     let secretKey = req.params.secretKey;
-    // let audioDataPath = req.files.audio.file;
+    let audioDataPath = req.files.audio.file;
 
-    // let parsedAudioMetaData = JSON.parse(req.body.audioMetaData);
-    // let correctAnswer = parsedAudioMetaData.answer;
-    // let audioSpeed = parsedAudioMetaData.speed;
-    // let audioReverse = parsedAudioMetaData.reverse;
+    let audioId = uuidv4();
+    let parsedAudioMetaData = JSON.parse(req.body.audioMetaData);
+    let correctAnswer = parsedAudioMetaData.answer;
+    let audioSpeed = parsedAudioMetaData.speed;
+    let audioReverse = parsedAudioMetaData.reverse;
 
-    // let audioId = new mongoose.Types.ObjectId();
-    // let arrayBufferWav = null;
+    let audioObj = {
+        audioId: audioId,
+        answer: correctAnswer,
+        speed: audioSpeed,
+        reverse: audioReverse
+    }
 
-    // let audioObj = {
-    //     audioId: audioId,
-    //     answer: correctAnswer,
-    //     speed: audioSpeed,
-    //     reverse: audioReverse
-    // }
+    let arrayBufferWav = null;
     
     //reverses audio data and saves it in minio
-    // if(audioReverse){
-    //     let buffer = fs.readFileSync(audioDataPath);
-    //     let audioCtx = new WAA.AudioContext();
-    //     audioCtx.decodeAudioData(buffer, 
-    //         function(audioBuffer) {
-    //             Array.prototype.reverse.call( audioBuffer.getChannelData(0) );
-    //             Array.prototype.reverse.call( audioBuffer.getChannelData(1) );
-    //             arrayBufferWav = audioBufferToWav(audioBuffer);
-    //             minioClient.putObject("gamebucket", `${audioId}.wav`, Buffer.from(arrayBufferWav))
-    //             .then(() => res.send())
-    //             .catch((err) => {
-    //                 console.log(err);
-    //                 res.status(500).send();
-    //             });
-    //         },
-    //         function(err){
-    //             console.log("Error with decoding audio data: ", err);
-    //             res.status(500); //does not work
-    //         }
-    //     );
-    // }
-    // else{
-    //     minioClient.putObject("gamebucket", `${audioId}.wav`, Buffer.from(arrayBufferWav))
-    //     .then(() => res.send())
-    //     .catch((err) => {
-    //         console.log(err);
-    //         res.status(500).send();
-    //     });
-    // }
+    if(audioReverse){
+        let buffer = fs.readFileSync(audioDataPath);
+        let audioCtx = new WAA.AudioContext();
+        audioCtx.decodeAudioData(buffer, 
+            function(audioBuffer) {
+                Array.prototype.reverse.call( audioBuffer.getChannelData(0) );
+                Array.prototype.reverse.call( audioBuffer.getChannelData(1) );
+                arrayBufferWav = audioBufferToWav(audioBuffer);
+                minioClient.putObject("gamebucket", `${audioId}.wav`, Buffer.from(arrayBufferWav))
+                .then(() => res.send())
+                .catch((err) => {
+                    console.log("uploading reversed audio data to minio failed: ", err);
+                    res.status(500).send();
+                });
+            },
+            function(err){
+                console.log("Error with decoding audio data: ", err);
+                res.status(500); //does not work
+            }
+        );
+    }
+    else{
+        minioClient.putObject("gamebucket", `${audioId}.wav`, Buffer.from(arrayBufferWav))
+        .then(() => res.send())
+        .catch((err) => {
+            console.log("uploading reversed audio data to minio failed: ", err);
+            res.status(500).send();
+        });
+    }
 
     //assigns audio meta data in db
-    await GameModel.updateOne(
-        {"gameCode": gameCode}, 
-        // {"$set": {"game.players.$[elem].audioMetaData": "succes"} },
-        // {multi: true, arrayFilters: [{"elem.secretKey": {$eq: secretKey }}]}
+    await GameModel.findOneAndUpdate(
         {
-            players
+            "gameCode": gameCode,
+            "game.players.secretKey": secretKey
+        },
+        {
+            $set: {"game.players.$.audioMetaData": audioObj} 
         }
     )
-    .then((result) => {
-        console.log("succes:", result);
-        res.send();
-    })
+    .then(() => res.send())
     .catch((err) => {
-        console.log("adding audio meta data", err);
+        console.log("uploading audio meta data failed: ", err);
         res.status(500).send();
     });
 });
@@ -376,20 +375,52 @@ app.get("/game/player/audio/data/:gameCode/:secretKey", (req, res) => {//how?
     let gameCode = req.params.gameCode.toUpperCase();
     let secretKey = req.params.secretKey;
 
-    GameModel.findOne({
-        "gameCode": gameCode,
-        "game.players.secretKey": secretKey
-    })
+    // GameModel.findOne(
+    //     {"game.players.$.secretKey": secretKey}
+    // )
+    // .then((gameDocument) => {
+    //     res.send(gameDocument);
+    // })
+    // .catch((err) => {
+    //     console.log(err);
+    //     res.status(500).send();
+    // });
+
+    GameModel.findOne(
+        {"game.players.secretKey": secretKey},
+        {"game.players.audioMetaData": true}
+    )
     .then((gameDocument) => {
-        console.log(gameDocument);
+        res.send(gameDocument);
     })
     .catch((err) => {
         console.log(err);
         res.status(500).send();
     });
 
-    let buffer = fs.readFileSync(player.audioPath);
-    res.send(buffer);
+    // GameModel.findOne({}, {"gameCode": gameCode, "game.players": {$elemMatch: {"secretKey": secretKey}}})
+    // .then((gameDocument) => {
+    //     res.send(gameDocument);
+    // })
+    // .catch((err) => {
+    //     console.log(err);
+    //     res.status(500).send();
+    // });
+
+    // GameModel.findOne({
+    //     "gameCode": gameCode,
+    //     "game.players.secretKey": secretKey
+    // })
+    // .then((gameDocument) => {
+    //     res.send(gameDocument);
+    // })
+    // .catch((err) => {
+    //     console.log(err);
+    //     res.status(500).send();
+    // });
+
+    // let buffer = ;
+    // res.send();
 });
 
 app.get("/game/player/audio/speed/:gameCode/:secretKey", (req, res) => {

@@ -22,6 +22,7 @@
     "request": "^2.88.2",
     "shortid": "^2.2.15",
     "uniqid": "^5.2.0",
+    "uuid": "^8.0.0",
     "vmsg": "^0.3.6",
     "vorbis.js": "^0.1.1",
     "waveform-data": "^3.3.1",
