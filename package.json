@@ -8,6 +8,7 @@
     "audiobuffer-to-wav": "^1.0.0",
     "av": "^0.4.9",
     "busboy-express": "^1.0.6",
+    "concat-stream": "^2.0.0",
     "custom-id": "^1.2.0",
     "express": "^4.17.1",
     "express-busboy": "^7.0.1",
