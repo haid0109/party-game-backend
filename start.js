@@ -311,9 +311,9 @@ busboy.extend(app, {
 app.post("/game/player/audio/:gameCode/:secretKey", async (req, res) => {//patch or post request?
     let gameCode = req.params.gameCode.toUpperCase();
     let secretKey = req.params.secretKey;
+    let gameExist = true;
     let audioDataPath = req.files.audio.file;
     let arrayBufferWav = null;
-    let game = null;
 
     let parsedAudioMetaData = JSON.parse(req.body.audioMetaData);
     let audioMetaDataObj = {
@@ -331,8 +331,8 @@ app.post("/game/player/audio/:gameCode/:secretKey", async (req, res) => {//patch
         {"game.players.audioMetaData.$": 1}
     )
     .then((gameDocument) => {
-        if(!!gameDocument){game = true;}
-        if(!!gameDocument.game.players[0].audioMetaData.audioId)
+        if(!gameDocument){return gameExist = false;}
+        if(!!gameDocument.game.players[0].audioMetaData)
         {
             return audioMetaDataObj.audioId = gameDocument.game.players[0].audioMetaData.audioId;
         }
@@ -340,16 +340,17 @@ app.post("/game/player/audio/:gameCode/:secretKey", async (req, res) => {//patch
     })
     .catch((err) => {
         console.log("checking if audioId exists failed: ", err);
+        gameExist = false;
         res.status(500).send();
     });
-    if(!game){return res.status(404).send;}
+    if(!gameExist){return res.status(404).send;}
     
     //reverses audio data and saves it in minio
-    if(audioMetaDataObj.reverse){
-        let buffer = fs.readFileSync(audioDataPath);
-        let audioCtx = new WAA.AudioContext();
-        audioCtx.decodeAudioData(buffer, 
-            function(audioBuffer) {
+    let buffer = fs.readFileSync(audioDataPath);
+    let audioCtx = new WAA.AudioContext();
+    audioCtx.decodeAudioData(buffer, 
+        function(audioBuffer) {
+            if(audioMetaDataObj.reverse){
                 Array.prototype.reverse.call( audioBuffer.getChannelData(0) );
                 Array.prototype.reverse.call( audioBuffer.getChannelData(1) );
                 arrayBufferWav = audioBufferToWav(audioBuffer);
@@ -358,20 +359,21 @@ app.post("/game/player/audio/:gameCode/:secretKey", async (req, res) => {//patch
                     console.log("uploading reversed audio data to minio failed: ", err);
                     res.status(500).send();
                 });
-            },
-            function(err){
-                console.log("Error with decoding audio data: ", err);
-                res.status(500); //does not work
             }
-        );
-    }
-    else{
-        minioClient.putObject("gamebucket", `${audioMetaDataObj.audioId}.wav`, Buffer.from(arrayBufferWav))
-        .catch((err) => {
-            console.log("uploading audio data to minio failed: ", err);
-            res.status(500).send();
-        });
-    }
+            else{
+                arrayBufferWav = audioBufferToWav(audioBuffer);
+                minioClient.putObject("gamebucket", `${audioMetaDataObj.audioId}.wav`, Buffer.from(arrayBufferWav))
+                .catch((err) => {
+                    console.log("uploading audio data to minio failed: ", err);
+                    res.status(500).send();
+                });
+            }
+        },
+        function(err){
+            console.log("Error with decoding audio data: ", err);
+            res.status(500); //does not work
+        }
+    );
 
     //assigns audio meta data in db
     GameModel.findOneAndUpdate(
@@ -447,6 +449,26 @@ app.get("/game/player/audio/metaData/:gameCode/:secretKey", (req, res) => {
     })
     .catch((err) => {
         console.log("getting specific audioMetaData failed: ", err);
+        res.status(500).send();
+    });
+});
+
+app.put("/game/player/ready/:gameCode/:secretKey", (req, res) => {//put or post request?
+    let gameCode = req.params.gameCode.toUpperCase();
+    let secretKey = req.params.secretKey;
+
+    GameModel.findOneAndUpdate(
+        {
+            "gameCode": gameCode,
+            "game.players.secretKey": secretKey
+        },
+        {
+            $set: {"game.players.$.playerReady": true} 
+        }
+    )
+    .then(() => res.send())
+    .catch((err) => {
+        console.log("uploading player guess failed: ", err);
         res.status(500).send();
     });
 });
@@ -545,8 +567,6 @@ app.get("/game/players/answered/:gameCode", (req, res) => {
         gameDocument.game.players.forEach(player => {
             if(!!player.guess[roundIndex]){numberOfPlayersAnswered++}
         });
-        console.log(gameDocument.game.players.length); //remove later
-        console.log(gameDocument.game.numberOfRounds); //remove later
         if(numberOfPlayersAnswered != gameDocument.game.players.length){return res.status(403).send();}
         res.send();
     })
@@ -560,13 +580,14 @@ app.get("/game/round/results/:gameCode/:secretKey", async (req, res) => {
     let gameCode = req.params.gameCode.toUpperCase();
     let secretKey = req.params.secretKey;
     let gameExist = true;
+    let roundIndex = null;
     let AnswerIsCorrect = false;
     let correctAnswer = "";
 
     await GameModel.findOne({"gameCode": gameCode})
     .then((gameDocument) => {
         if(!gameDocument){return gameExist = false;}
-        let roundIndex = gameDocument.game.currentRound - 1;
+        roundIndex = gameDocument.game.currentRound - 1;
         correctAnswer = gameDocument.game.players[roundIndex].audioMetaData.answer;
     })
     .catch((err) => {
@@ -585,7 +606,7 @@ app.get("/game/round/results/:gameCode/:secretKey", async (req, res) => {
     )
     .then((gameDocument) => {
         if(!gameDocument){return gameExist = false;}
-        let playerGuess = gameDocument.game.players[0].guess
+        let playerGuess = gameDocument.game.players[0].guess[roundIndex]
         if(playerGuess != correctAnswer){return}
         AnswerIsCorrect = true;
     })
@@ -631,12 +652,14 @@ app.get("/game/round/last/:gameCode", (req, res) => {
 app.put("/game/round/next/:gameCode/:roundNum", async (req, res) => {//put or post request?
     let gameCode = req.params.gameCode.toUpperCase();
     let roundNum = req.params.roundNum;
+    let lastRound = false;
     let gameNotStarted = true;
     let roundAlreadyChanged = true;
 
     await GameModel.findOne({"gameCode": gameCode})
     .then((gameDocument) => {
         if(!gameDocument){return}
+        if(gameDocument.game.numberOfRounds == gameDocument.game.currentRound){return lastRound = true;}
         if(gameDocument.game.state == "in progress"){gameNotStarted = false;}
         if(gameDocument.game.currentRound == roundNum){roundAlreadyChanged = false;}
     })
@@ -645,6 +668,7 @@ app.put("/game/round/next/:gameCode/:roundNum", async (req, res) => {//put or po
         res.status(500).send();
     });
 
+    if(lastRound){return res.status(400).send();}
     if(gameNotStarted){return res.status(404).send();}
     if(roundAlreadyChanged){return res.status(403).send();}
 
@@ -718,7 +742,7 @@ app.put("/game/player/done/:gameCode/:secretKey", async (req, res) => {//put or 
     });
 });
 
-app.delete("/game/over/:gameCode", async (req, res) => {//put or post request?
+app.delete("/game/over/:gameCode", async (req, res) => {
     let gameCode = req.params.gameCode.toUpperCase();
     let gameExist = true;
     let numOfPlayers = 0;
@@ -729,15 +753,15 @@ app.delete("/game/over/:gameCode", async (req, res) => {//put or post request?
     .then((gameDocument) => {
         if(!gameDocument){return gameExist = false;}
         numOfPlayers = gameDocument.game.players.length;
-        gameDocument.game.player.forEach(player => {
+        gameDocument.game.players.forEach(player => {
             if(player.done){
                 playersDone++;
-                allAudioIds.push(player.metaDataObj.audioId);
+                allAudioIds.push(`${player.audioMetaData.audioId}.wav`);
             }
         });
     })
     .catch((err) => {
-        console.log("checking if it was the last round of the game failed: ", err);
+        console.log("checking if it was the last round of the game to remove it failed: ", err);
         gameExist = false;
         res.status(500).send();
     });
@@ -746,14 +770,13 @@ app.delete("/game/over/:gameCode", async (req, res) => {//put or post request?
     if(numOfPlayers != playersDone){return res.status(403).send();}
 
     GameModel.findOneAndRemove({"gameCode": gameCode})
-    .then(resp => console.log(resp))
     .catch((err) => {
         console.log("removing game from mongodb failed: ", err);
         res.status(500).send();
     });
 
     minioClient.removeObjects("gamebucket", allAudioIds)
-    .then(resp => console.log(resp))
+    .then(resp => console.log(resp)) //remove
     .catch((err) => {
         console.log("removing all game audio files from minio failed: ", err);
         res.status(500).send();
